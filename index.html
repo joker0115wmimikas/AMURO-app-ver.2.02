@@ -1,0 +1,843 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  
+  <title>安室RC 総合管理ポータル</title>
+  
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.292.0"
+      }
+    }
+  </script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  
+  <style>
+    body { font-family: 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', Meiryo, sans-serif; background-color: #f8fafc; }
+    
+    @media print {
+      body * { visibility: hidden; }
+      #print-root, #print-root * { visibility: visible; }
+      #print-root { position: absolute; left: 0; top: 0; width: 100%; margin: 0; padding: 0; background: white; color: black; }
+      @page { size: A4 portrait; margin: 10mm 15mm; }
+      .no-print { display: none !important; }
+      table { border-collapse: collapse; width: 100%; }
+      th, td { border: 1.5px solid black !important; padding: 6px; }
+      .print-bg-gray { background-color: #e5e7eb !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    }
+    
+    .loader { border: 4px solid #f3f3f3; border-top: 4px solid #3b82f6; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel" data-type="module">
+    import React, { useState, useEffect, useMemo } from 'react';
+    import { createRoot } from 'react-dom/client';
+    
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
+    import { getFirestore, collection, doc, onSnapshot, addDoc, updateDoc, deleteDoc, writeBatch, setDoc } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+    import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+    
+    import { 
+      Users, Lock, UserPlus, Banknote, Trophy, ChevronRight, 
+      FileText, LogOut, CheckCircle2, Home, Settings, 
+      Trash2, Download, Camera, Printer, X, GraduationCap
+    } from 'lucide-react';
+
+    const envConfigStr = typeof __firebase_config !== 'undefined' ? __firebase_config : '{}';
+    const envConfig = JSON.parse(envConfigStr);
+    const isCanvasEnv = Object.keys(envConfig).length > 0;
+    const currentAppId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+    
+    // =========================================================================
+    // ★ ご自身の Firebase Config ★
+    // =========================================================================
+    const manualConfig = {
+      apiKey: "AIzaSyDz9kn5I_TOT9_YmFJk4BaOyMUmkCnwuh8",
+      authDomain: "amuro-rc-app.firebaseapp.com",
+      projectId: "amuro-rc-app",
+      storageBucket: "amuro-rc-app.firebasestorage.app",
+      messagingSenderId: "194028750411",
+      appId: "1:194028750411:web:5cce3ff1bd5b0995582fce"
+    };
+    
+    const firebaseConfig = isCanvasEnv ? envConfig : manualConfig;
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    const auth = getAuth(app);
+    
+    const getColRef = (colName) => isCanvasEnv ? collection(db, 'artifacts', currentAppId, 'public', 'data', colName) : collection(db, colName);
+    const getDocRef = (colName, docId) => isCanvasEnv ? doc(db, 'artifacts', currentAppId, 'public', 'data', colName, docId) : doc(db, colName, docId);
+    
+    const safeGetStorage = (key) => { try { return localStorage.getItem(key) || ''; } catch(e) { return ''; } };
+    const safeSetStorage = (key, val) => { try { localStorage.setItem(key, val); } catch(e) { } };
+    
+    const GRADES = ['1年','2年','3年','4年','5年','6年','中学1年(OB/OG)','中学2年(OB/OG)','中学3年(OB/OG)','高校生以上(OB/OG)'];
+    const ADMIN_PIN = "1049";
+
+    function App() {
+      const [view, setView] = useState('portal');
+      const [procedureType, setProcedureType] = useState('new');
+      const [adminName, setAdminName] = useState('');
+      
+      const [members, setMembers] = useState([]);
+      const [entries, setEntries] = useState([]);
+      const [tournaments, setTournaments] = useState([]);
+      const [officers, setOfficers] = useState(["久保", "桝本", "山道", "岩﨑", "加藤"]);
+      const [apiKey, setApiKey] = useState(() => safeGetStorage('amuro_gemini_key'));
+      
+      const [loading, setLoading] = useState(true);
+      const [user, setUser] = useState(null);
+      const [printMember, setPrintMember] = useState(null);
+
+      useEffect(() => {
+        const forceUnlock = setTimeout(() => { setLoading(false); }, 5000);
+        const initAuth = async () => {
+          try {
+            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+              await signInWithCustomToken(auth, __initial_auth_token);
+            } else {
+              await signInAnonymously(auth);
+            }
+          } catch(e) { 
+            console.error("Firebase Auth Warning:", e); 
+          }
+        };
+        initAuth();
+        
+        const unsubscribe = onAuthStateChanged(auth, setUser);
+        return () => { clearTimeout(forceUnlock); unsubscribe(); };
+      }, []);
+
+      useEffect(() => {
+        if (!user) return;
+
+        const to = setTimeout(() => setLoading(false), 2000); 
+        
+        // データを読み込むとき、確実に「Firebaseの正しいID」を割り当てる
+        const unsubMembers = onSnapshot(getColRef('members'), (snap) => {
+          setMembers(snap.docs.map(d => {
+            const data = d.data();
+            return { ...data, id: d.id }; // 必ず最後にIDを上書きする
+          }));
+          setLoading(false); clearTimeout(to);
+        }, err => { console.error("DB Error:", err); setLoading(false); });
+        
+        const unsubEntries = onSnapshot(getColRef('entries'), s => setEntries(s.docs.map(d => ({ ...d.data(), id: d.id }))), e => console.warn(e));
+        const unsubTournaments = onSnapshot(getColRef('tournaments'), s => setTournaments(s.docs.map(d => ({ ...d.data(), id: d.id }))), e => console.warn(e));
+        const unsubOfficers = onSnapshot(getDocRef('settings', 'officers'), d => { if(d.exists()) setOfficers(d.data().names); }, e => console.warn(e));
+        
+        return () => { unsubMembers(); unsubEntries(); unsubTournaments(); unsubOfficers(); clearTimeout(to); };
+      }, [user]);
+
+      const handleSaveMember = async (data, isNew) => {
+        try {
+          const { id, ...saveData } = data; // 保存するときはアプリ側のIDを抜く
+          if (isNew) {
+            await addDoc(getColRef('members'), { ...saveData, createdAt: Date.now() });
+          } else {
+            if (!id) throw new Error("対象者のIDが見つかりません。画面を再読み込みしてください。");
+            await updateDoc(getDocRef('members', id), { ...saveData, updatedAt: Date.now() });
+          }
+        } catch (error) {
+          console.error("保存エラー:", error);
+          throw error; 
+        }
+      };
+
+      if (loading) return (
+        <div className="min-h-screen flex flex-col items-center justify-center bg-white">
+          <div className="loader mb-4"></div>
+          <p className="font-bold text-slate-600">安室RC 起動中...</p>
+        </div>
+      );
+
+      return (
+        <div className="min-h-screen flex flex-col relative">
+          <header className="bg-slate-800 text-white p-4 shadow-md sticky top-0 z-40 no-print">
+            <div className="max-w-5xl mx-auto flex justify-between items-center">
+              <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setView('portal')}>
+                <Home className="text-blue-400" size={20} />
+                {/* ★追加：最新版か確認するための「v1.1」バッジ */}
+                <h1 className="text-xl font-bold tracking-widest flex items-end">
+                  安室RC ポータル <span className="text-[10px] font-normal text-blue-300 ml-2 mb-1 tracking-normal">v1.1</span>
+                </h1>
+              </div>
+              <div className="flex items-center space-x-3">
+                {adminName && <span className="text-blue-300 font-bold text-sm hidden sm:inline">{adminName} 役員</span>}
+                <button onClick={() => adminName ? setView('admin') : setView('pin')} className="bg-slate-700 px-3 py-1.5 rounded flex items-center text-sm font-bold shadow hover:bg-slate-600">
+                  <Lock size={14} className="mr-2" />役員専用
+                </button>
+              </div>
+            </div>
+          </header>
+          <main className="max-w-5xl mx-auto w-full p-4 py-8 flex-grow">
+            {view === 'portal' && <PortalMenu setView={setView} setType={setProcedureType} />}
+            {view === 'pin' && <PinInput onSuccess={() => setView('adminAuth')} />}
+            {view === 'adminAuth' && <AdminAuthSelect officers={officers} onSelect={(name) => { setAdminName(name); setView('admin'); }} />}
+            {view === 'entry' && <EntryForm members={members.filter(m=>m.isActive)} tournaments={tournaments} setView={setView} />}
+            {view === 'procedure' && <ProcedureForm type={procedureType} members={members} onSave={handleSaveMember} setView={setView} />}
+            {view === 'admin' && (
+              <AdminDashboard 
+                db={db} members={members} entries={entries} tournaments={tournaments} 
+                officers={officers} adminName={adminName} apiKey={apiKey} setApiKey={setApiKey}
+                onLogout={() => { setAdminName(''); setView('portal'); }} onPrint={setPrintMember}
+              />
+            )}
+          </main>
+          {printMember && <PrintTemplate member={printMember} onClose={() => setPrintMember(null)} />}
+        </div>
+      );
+    }
+
+    function PortalMenu({ setView, setType }) {
+      return (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 animate-in fade-in">
+          <button onClick={() => { setType('new'); setView('procedure'); }} className="bg-white p-8 rounded-3xl shadow-sm border-b-4 border-emerald-500 text-left hover:shadow-md transition-all">
+            <div className="bg-emerald-100 p-4 rounded-2xl text-emerald-600 mb-4 w-fit"><UserPlus size={32} /></div>
+            <h3 className="font-bold text-xl text-slate-800">新規入会 申請</h3>
+            <p className="text-sm text-slate-400 mt-2">新しくクラブに参加される方はこちら</p>
+          </button>
+          <button onClick={() => { setType('update'); setView('procedure'); }} className="bg-white p-8 rounded-3xl shadow-sm border-b-4 border-blue-500 text-left hover:shadow-md transition-all">
+            <div className="bg-blue-100 p-4 rounded-2xl text-blue-600 mb-4 w-fit"><FileText size={32} /></div>
+            <h3 className="font-bold text-xl text-slate-800">継続更新 申請</h3>
+            <p className="text-sm text-slate-400 mt-2">次年度も継続して活動される方はこちら</p>
+          </button>
+          <button onClick={() => { setType('leave'); setView('procedure'); }} className="bg-white p-8 rounded-3xl shadow-sm border-b-4 border-rose-500 text-left hover:shadow-md transition-all">
+            <div className="bg-rose-100 p-4 rounded-2xl text-rose-600 mb-4 w-fit"><LogOut size={32} /></div>
+            <h3 className="font-bold text-xl text-slate-800">退会 申請</h3>
+            <p className="text-sm text-slate-400 mt-2">活動を終了される方の手続きはこちら</p>
+          </button>
+          <button onClick={() => setView('entry')} className="bg-white p-8 rounded-3xl shadow-sm border-b-4 border-amber-500 text-left hover:shadow-md transition-all">
+            <div className="bg-amber-100 p-4 rounded-2xl text-amber-600 mb-4 w-fit"><Trophy size={32} /></div>
+            <h3 className="font-bold text-xl text-slate-800">大会エントリー</h3>
+            <p className="text-sm text-slate-400 mt-2">各大会への出場申し込みはこちら</p>
+          </button>
+        </div>
+      );
+    }
+
+    function ProcedureForm({ type, members, onSave, setView }) {
+      const isLeave = type === 'leave';
+      const [mid, setMid] = useState('');
+      const [done, setDone] = useState(false);
+      const [errorMsg, setErrorMsg] = useState(''); 
+      
+      const [f, setF] = useState({
+        name: '', kana: '', eventType: '', birthDate: '', age: '',
+        schoolName: '', grade: '1年', gender: '男',
+        parentFatherName: '', parentFatherEmail: '', parentFatherPhone: '',
+        parentMotherName: '', parentMotherEmail: '', parentMotherPhone: '',
+        postalCode: '', address: '', homePhone: '', fax: '',
+        health: '', bloodType: '', height: '',
+        notes: '', requests: '', goals: '', insurance: '子供 (A1 AW)', leaveReason: ''
+      });
+
+      useEffect(() => { 
+        if(mid) { 
+          const m = members.find(x=>x.id===mid); 
+          if(m) setF(prev => ({...prev, ...m})); 
+        } 
+      }, [mid, members]);
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        setErrorMsg('');
+
+        if (type !== 'new' && !mid) {
+           setErrorMsg("対象者を選択してください。");
+           return;
+        }
+
+        if (!isLeave) {
+          if (!f.parentFatherName && !f.parentMotherName) {
+            setErrorMsg("保護者の氏名を少なくとも1名分入力してください。");
+            return;
+          }
+          if (!f.parentFatherPhone && !f.parentMotherPhone) {
+            setErrorMsg("保護者の携帯電話番号を少なくとも1名分入力してください。");
+            return;
+          }
+          if (!f.parentFatherEmail && !f.parentMotherEmail) {
+            setErrorMsg("保護者のメールアドレスを少なくとも1名分入力してください。");
+            return;
+          }
+        }
+
+        const data = isLeave ? { id: mid, isActive: false, status: 'leaved', leaveReason: f.leaveReason } : { id: mid, ...f, isActive: true, status: type };
+        
+        try {
+          await onSave(data, type === 'new');
+          setDone(true);
+        } catch (err) {
+          setErrorMsg(`送信に失敗しました。\n【エラー原因】\n${err.message}`);
+        }
+      };
+
+      if (done) return (
+        <div className="max-w-md mx-auto p-12 bg-white rounded-3xl shadow-lg border text-center animate-in zoom-in">
+          <CheckCircle2 className="mx-auto text-blue-500 w-20 h-20 mb-6" />
+          <h2 className="text-2xl font-bold mb-4">申請完了</h2>
+          <p className="text-slate-500 mb-8">送信されました。役員が確認いたします。</p>
+          <button onClick={() => setView('portal')} className="w-full bg-slate-800 text-white font-bold py-4 rounded-2xl">ポータルへ戻る</button>
+        </div>
+      );
+
+      return (
+        <div className="max-w-2xl mx-auto space-y-6">
+          <div className="flex items-center justify-between">
+            <h2 className="text-2xl font-bold flex items-center"><FileText className="text-blue-500 mr-3" />{type==='new'?'新規入会':type==='update'?'継続更新':'退会'} 申請書</h2>
+            <button onClick={() => setView('portal')} className="text-sm text-slate-500 bg-white px-4 py-2 rounded-xl border shadow-sm">戻る</button>
+          </div>
+          
+          <form onSubmit={handleSubmit} className="bg-white rounded-3xl shadow-sm border border-t-8 border-t-blue-500 p-8 space-y-8">
+            
+            {errorMsg && (
+              <div className="bg-rose-100 border border-rose-300 text-rose-700 p-4 rounded-xl font-bold animate-in fade-in whitespace-pre-wrap">
+                {errorMsg}
+              </div>
+            )}
+
+            {type !== 'new' && (
+              <div className="bg-slate-50 p-4 rounded-xl border border-blue-100">
+                <label className="block text-sm font-bold text-slate-700 mb-2">対象者を選択してください</label>
+                <select className="w-full p-4 border rounded-lg font-bold bg-white" value={mid} onChange={e=>setMid(e.target.value)}>
+                  <option value="">-- 対象者を選択 --</option>
+                  {members.filter(m=>m.isActive).map(m=><option key={m.id} value={m.id}>{m.grade} | {m.name}</option>)}
+                </select>
+              </div>
+            )}
+            {(type === 'new' || mid) && (
+              <div className="space-y-6 animate-in slide-in-from-top-4">
+                {isLeave ? (
+                  <div className="bg-rose-50 p-6 rounded-2xl border border-rose-200 space-y-4">
+                    <h3 className="font-bold text-rose-700 border-b border-rose-200 pb-2">退会される選手: {f.name} ({f.grade})</h3>
+                    <div>
+                      <label className="block text-sm font-bold text-rose-600 mb-2">退会理由 (任意)</label>
+                      <textarea className="w-full border border-rose-200 rounded-xl p-4 bg-white" rows="3" value={f.leaveReason || ''} onChange={e=>setF({...f, leaveReason:e.target.value})} />
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-4">
+                      <h3 className="font-bold border-b pb-2 text-slate-700">選手基本情報</h3>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div><label className="block text-xs font-bold text-slate-500 mb-1">氏名 (子供の氏名)</label><input required className="w-full p-3 border rounded font-bold" value={f.name} onChange={e=>setF({...f, name:e.target.value})} /></div>
+                        <div><label className="block text-xs font-bold text-slate-500 mb-1">ふりがな</label><input required className="w-full p-3 border rounded" value={f.kana} onChange={e=>setF({...f, kana:e.target.value})} /></div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div><label className="block text-xs font-bold text-slate-500 mb-1">希望種目</label><input className="w-full p-3 border rounded placeholder-slate-300" placeholder="短距離・長距離" value={f.eventType} onChange={e=>setF({...f, eventType:e.target.value})} /></div>
+                        <div className="flex gap-2">
+                          <div className="flex-1"><label className="block text-xs font-bold text-slate-500 mb-1">生年月日</label><input type="date" required className="w-full p-3 border rounded text-sm" value={f.birthDate} onChange={e=>setF({...f, birthDate:e.target.value})} /></div>
+                          <div className="w-20"><label className="block text-xs font-bold text-slate-500 mb-1">年齢</label><input type="number" className="w-full p-3 border rounded text-center" placeholder="歳" value={f.age} onChange={e=>setF({...f, age:e.target.value})} /></div>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className="md:col-span-1"><label className="block text-xs font-bold text-slate-500 mb-1">学校名</label><input required className="w-full p-3 border rounded font-bold" value={f.schoolName} onChange={e=>setF({...f, schoolName:e.target.value})} /></div>
+                        <div><label className="block text-xs font-bold text-slate-500 mb-1">学年</label><select className="w-full p-3 border rounded" value={f.grade} onChange={e=>setF({...f, grade:e.target.value})}>{GRADES.map(g=><option key={g}>{g}</option>)}</select></div>
+                        <div><label className="block text-xs font-bold text-slate-500 mb-1">性別</label><select className="w-full p-3 border rounded" value={f.gender} onChange={e=>setF({...f, gender:e.target.value})}><option>男</option><option>女</option></select></div>
+                      </div>
+                    </div>
+
+                    <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-4">
+                      <h3 className="font-bold border-b pb-2 text-slate-700 flex items-center justify-between">
+                        保護者・連絡先
+                        <span className="text-[10px] text-rose-500 font-normal bg-rose-50 px-2 py-1 rounded">※少なくとも1名の連絡先を入力してください</span>
+                      </h3>
+                      
+                      <div className="space-y-3 bg-white p-4 rounded border">
+                        <div className="font-bold text-sm text-slate-600">保護者1 (父など)</div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <input placeholder="氏名" className="p-3 border rounded" value={f.parentFatherName} onChange={e=>setF({...f, parentFatherName:e.target.value})} />
+                          <input placeholder="携帯電話" className="p-3 border rounded font-mono" value={f.parentFatherPhone} onChange={e=>setF({...f, parentFatherPhone:e.target.value})} />
+                        </div>
+                        <input placeholder="メールアドレス" className="w-full p-3 border rounded" value={f.parentFatherEmail} onChange={e=>setF({...f, parentFatherEmail:e.target.value})} />
+                      </div>
+
+                      <div className="space-y-3 bg-white p-4 rounded border">
+                        <div className="font-bold text-sm text-slate-600">保護者2 (母など)</div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div><input placeholder="氏名" className="w-full p-3 border rounded bg-white" value={f.parentMotherName} onChange={e=>setF({...f, parentMotherName:e.target.value})} /></div>
+                          <div><input placeholder="携帯電話" className="w-full p-3 border rounded font-mono bg-white" value={f.parentMotherPhone} onChange={e=>setF({...f, parentMotherPhone:e.target.value})} /></div>
+                        </div>
+                        <input placeholder="メールアドレス" className="w-full p-3 border rounded bg-white" value={f.parentMotherEmail} onChange={e=>setF({...f, parentMotherEmail:e.target.value})} />
+                      </div>
+
+                      <div className="flex gap-2"><input placeholder="〒" className="w-24 p-3 border rounded" value={f.postalCode} onChange={e=>setF({...f, postalCode:e.target.value})} /><input placeholder="現住所" required className="flex-1 p-3 border rounded" value={f.address} onChange={e=>setF({...f, address:e.target.value})} /></div>
+                      <div className="grid grid-cols-2 gap-4"><input placeholder="自宅電話" className="p-3 border rounded" value={f.homePhone} onChange={e=>setF({...f, homePhone:e.target.value})} /><input placeholder="自宅FAX" className="p-3 border rounded" value={f.fax} onChange={e=>setF({...f, fax:e.target.value})} /></div>
+                    </div>
+                    
+                    <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-4">
+                      <h3 className="font-bold border-b pb-2 text-slate-700">健康・その他</h3>
+                      <div className="grid grid-cols-3 gap-3"><input placeholder="健康状態" className="p-3 border rounded" value={f.health} onChange={e=>setF({...f, health:e.target.value})} /><input placeholder="血液型" className="p-3 border rounded" value={f.bloodType} onChange={e=>setF({...f, bloodType:e.target.value})} /><input placeholder="身長(cm)" type="number" className="p-3 border rounded" value={f.height} onChange={e=>setF({...f, height:e.target.value})} /></div>
+                      <textarea placeholder="通達事項等 (アレルギー体質等)" className="w-full p-3 border rounded" rows="2" value={f.notes} onChange={e=>setF({...f, notes:e.target.value})} />
+                      <textarea placeholder="クラブチームへの要望" className="w-full p-3 border rounded" rows="2" value={f.requests} onChange={e=>setF({...f, requests:e.target.value})} />
+                      <textarea placeholder="クラブチームでの目標" className="w-full p-3 border rounded" rows="2" value={f.goals} onChange={e=>setF({...f, goals:e.target.value})} />
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 mb-1">スポーツ保険の加入区分</label>
+                        <select className="w-full p-3 border rounded bg-white" value={f.insurance} onChange={e=>setF({...f, insurance:e.target.value})}>
+                          <option>子供 (A1 AW)</option><option>大人 (A2C B)</option>
+                        </select>
+                      </div>
+                    </div>
+                  </>
+                )}
+                <div className="text-xs text-slate-600 mb-4 bg-yellow-100 p-4 rounded-xl border border-yellow-300 leading-relaxed font-bold">
+                  ※入会と同時に会則に同意致します。データーはクラブ運営以外に漏洩させません。<br/>
+                  ※注意事項：ご自宅の電話番号(または携帯)と保護者の連絡用メールアドレスは必須でお願いします。
+                </div>
+                <button type="submit" className={`w-full py-5 rounded-xl font-bold text-lg shadow-lg text-white ${isLeave ? 'bg-rose-600 hover:bg-rose-700' : 'bg-blue-600 hover:bg-blue-700'}`}>この内容で申請を保存する</button>
+              </div>
+            )}
+          </form>
+        </div>
+      );
+    }
+
+    function PinInput({ onSuccess }) {
+      const [v, setV] = useState('');
+      return (
+        <div className="max-w-xs mx-auto mt-20 bg-white p-10 rounded-3xl shadow-lg border text-center">
+          <Lock className="w-12 h-12 mx-auto text-slate-300 mb-6" />
+          <h2 className="font-bold mb-6">パスコード</h2>
+          <input type="password" maxLength={4} className="w-full text-center text-4xl tracking-[0.5em] p-4 border-b-2 outline-none focus:border-slate-800" autoFocus value={v} onChange={e => {setV(e.target.value); if(e.target.value === ADMIN_PIN) onSuccess();}} />
+        </div>
+      );
+    }
+
+    function AdminAuthSelect({ officers, onSelect }) {
+      return (
+        <div className="max-w-md mx-auto mt-12 bg-white p-10 rounded-3xl shadow-lg border text-center">
+          <h2 className="font-bold mb-8">役員を選択</h2>
+          <div className="grid grid-cols-2 gap-4">{officers.map(o => <button key={o} onClick={() => onSelect(o)} className="p-4 border-2 rounded-xl font-bold hover:bg-slate-100 hover:border-slate-800 transition-all">{o}</button>)}</div>
+        </div>
+      );
+    }
+
+    function EntryForm({ members, tournaments, setView }) {
+      const [tid, setTid] = useState(tournaments[0]?.id || '');
+      const [mid, setMid] = useState('');
+      const [evs, setEvs] = useState([]);
+      const tour = tournaments.find(t=>t.id===tid);
+      const mem = members.find(m=>m.id===mid);
+      const [done, setDone] = useState(false);
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        await addDoc(getColRef('entries'), { tournamentId:tid, memberId:mid, name:mem.name, events:evs, fee:evs.length*tour.eventFee, isPaid:false, createdAt:Date.now() });
+        setDone(true);
+      };
+
+      if (done) return <div className="max-w-md mx-auto p-12 bg-white rounded-3xl shadow-lg border text-center"><CheckCircle2 className="mx-auto text-green-500 w-20 h-20 mb-6"/><h2 className="text-2xl font-bold mb-4">エントリー完了</h2><button onClick={()=>setView('portal')} className="w-full bg-slate-800 text-white font-bold py-4 rounded-xl mt-4">戻る</button></div>;
+
+      return (
+        <div className="max-w-xl mx-auto space-y-6">
+          <div className="flex items-center justify-between">
+             <h2 className="text-2xl font-bold flex items-center"><Trophy className="text-amber-500 mr-3" />大会エントリー</h2>
+             <button onClick={() => setView('portal')} className="text-sm text-slate-500 bg-white px-4 py-2 rounded-xl border shadow-sm">戻る</button>
+          </div>
+          <div className="bg-white p-8 rounded-3xl shadow-sm border space-y-6">
+            <select className="w-full p-4 border rounded-xl font-bold bg-slate-50" value={tid} onChange={e=>setTid(e.target.value)}>{tournaments.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</select>
+            <select className="w-full p-4 border rounded-xl font-bold" value={mid} onChange={e=>setMid(e.target.value)}><option value="">-- 選手を選択 --</option>{members.map(m=><option key={m.id} value={m.id}>{m.grade} | {m.name}</option>)}</select>
+            {tour && mid && (
+              <div className="space-y-6">
+                <div className="font-bold text-slate-700">出場種目を選択</div>
+                <div className="flex flex-wrap gap-2">
+                  {tour.events.map(ev => <button key={ev} onClick={()=>setEvs(p=>p.includes(ev)?p.filter(x=>x!==ev):[...p,ev])} className={`px-5 py-2.5 rounded-full font-bold text-sm border-2 transition-all ${evs.includes(ev)?'bg-blue-600 text-white border-blue-600':'bg-white text-slate-400 border-slate-200'}`}>{ev}</button>)}
+                </div>
+                <div className="p-6 bg-slate-800 rounded-xl text-white flex justify-between items-center shadow-lg">
+                  <div><span className="text-xs text-slate-400 block mb-1">合計予定額</span><span className="text-3xl font-bold text-amber-400">¥{(evs.length * tour.eventFee).toLocaleString()}</span></div>
+                  <button onClick={handleSubmit} className="bg-blue-500 px-8 py-4 rounded-xl font-bold">申し込む</button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // --- 役員ダッシュボード ---
+    function AdminDashboard({ db, members, entries, tournaments, officers, adminName, onLogout, onPrint, apiKey, setApiKey }) {
+      const [tab, setTab] = useState('members');
+      const [confirmDialog, setConfirmDialog] = useState(null); 
+      
+      const activeMembers = useMemo(() => members.filter(m => m.isActive).sort((a,b) => GRADES.indexOf(a.grade) - GRADES.indexOf(b.grade)), [members]);
+      const inactiveMembers = useMemo(() => members.filter(m => !m.isActive), [members]);
+      
+      const downloadCSV = () => {
+        const BOM = "\uFEFF";
+        let csv = "氏名,ふりがな,学年,性別,学校名,保護者父,携帯父,メール父,保護者母,携帯母,メール母,住所,健康,保険区分\n";
+        activeMembers.forEach(m => {
+          csv += `${m.name},${m.kana||''},${m.grade},${m.gender},${m.schoolName||''},${m.parentFatherName||''},${m.parentFatherPhone||''},${m.parentFatherEmail||''},${m.parentMotherName||''},${m.parentMotherPhone||''},${m.parentMotherEmail||''},${m.address||''},${m.health||''},${m.insurance||''}\n`;
+        });
+        const blob = new Blob([BOM + csv], { type: 'text/csv;charset=utf-8;' });
+        const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `安室RC名簿.csv`; a.click();
+      };
+
+      const requestDeleteMember = (m) => {
+        setConfirmDialog({
+          message: `選手「${m.name}」のデータを完全に削除しますか？\n※この操作は取り消せません。`,
+          onConfirm: async () => {
+            try {
+              if (!m || !m.id) throw new Error("対象のIDが見つかりません。画面を再読み込みしてください。");
+              await deleteDoc(getDocRef('members', m.id));
+              setTimeout(() => setConfirmDialog({ message: "削除が完了しました！", onConfirm: null, isInfo: true }), 300);
+            } catch (error) {
+              console.error("削除エラー:", error);
+              setTimeout(() => setConfirmDialog({ message: `削除に失敗しました。\n\n【エラー原因】\n${error.message}`, onConfirm: null, isInfo: true }), 300);
+            }
+          }
+        });
+      };
+
+      const requestUpgradeGrade = () => {
+        setConfirmDialog({
+          message: "全員の学年を上げ、集金をリセットします。\n本当によろしいですか？",
+          onConfirm: async () => {
+            try {
+              const promises = activeMembers.map(m => {
+                if (!m.id) return Promise.resolve();
+                let ng = m.grade;
+                switch(m.grade){case'1年':ng='2年';break;case'2年':ng='3年';break;case'3年':ng='4年';break;case'4年':ng='5年';break;case'5年':ng='6年';break;case'6年':ng='中学1年(OB/OG)';break;case'中学1年(OB/OG)':ng='中学2年(OB/OG)';break;case'中学2年(OB/OG)':ng='中学3年(OB/OG)';break;case'中学3年(OB/OG)':ng='高校生以上(OB/OG)';break;}
+                return updateDoc(getDocRef('members', m.id), { grade:ng, status:'updated', payments:{term1:false,term2:false,track:false,insurance:false} });
+              });
+              await Promise.all(promises);
+              setTimeout(() => setConfirmDialog({ message: "進級処理が完了しました。", onConfirm: null, isInfo: true }), 300);
+            } catch (error) {
+              console.error("進級エラー:", error);
+              setTimeout(() => setConfirmDialog({ message: `進級処理に失敗しました。\n\n【エラー原因】\n${error.message}`, onConfirm: null, isInfo: true }), 300);
+            }
+          }
+        });
+      };
+
+      return (
+        <div className="space-y-6 relative">
+          
+          {/* カスタム確認モーダル */}
+          {confirmDialog && (
+            <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-[150] p-4">
+              <div className="bg-white p-6 rounded-2xl max-w-sm w-full shadow-2xl animate-in zoom-in">
+                <h3 className="font-bold text-lg mb-6 whitespace-pre-wrap">{confirmDialog.message}</h3>
+                <div className="flex justify-end gap-3">
+                  {confirmDialog.isInfo ? (
+                    <button onClick={() => setConfirmDialog(null)} className="px-5 py-2.5 bg-blue-600 text-white rounded-xl font-bold w-full">OK</button>
+                  ) : (
+                    <>
+                      <button onClick={() => setConfirmDialog(null)} className="px-5 py-2.5 bg-slate-200 text-slate-700 rounded-xl font-bold hover:bg-slate-300 transition-colors">キャンセル</button>
+                      <button onClick={() => { confirmDialog.onConfirm(); setConfirmDialog(null); }} className="px-5 py-2.5 bg-rose-600 text-white rounded-xl font-bold hover:bg-rose-700 transition-colors">実行する</button>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="flex bg-white p-1 rounded-2xl shadow-sm border no-print overflow-x-auto gap-1">
+            {[{id:'members',label:'名簿',icon:Users},{id:'money',label:'会計',icon:Banknote},{id:'tour',label:'大会',icon:Trophy},{id:'set',label:'設定',icon:Settings}].map(t => (
+              <button key={t.id} onClick={() => setTab(t.id)} className={`flex-1 min-w-[80px] py-3 rounded-xl text-sm font-bold transition-all flex items-center justify-center ${tab === t.id ? 'bg-slate-800 text-white shadow' : 'text-slate-500'}`}>
+                <t.icon size={16} className="mr-2" />{t.label}
+              </button>
+            ))}
+          </div>
+
+          {tab === 'members' && (
+            <div className="space-y-6 animate-in fade-in">
+              <div className="bg-white rounded-3xl shadow-sm border p-6">
+                <div className="flex justify-between items-center mb-6">
+                  <h2 className="font-bold text-xl border-l-4 border-emerald-500 pl-3">在籍名簿 ({activeMembers.length}名)</h2>
+                  <button onClick={downloadCSV} className="text-xs bg-slate-100 px-4 py-2 rounded-xl font-bold hover:bg-slate-200 flex items-center"><Download size={14} className="mr-1"/>CSV出力</button>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm whitespace-nowrap border-collapse">
+                    <thead className="bg-slate-50 border-y"><tr><th className="p-3">氏名</th><th className="p-3 text-center">学年</th><th className="p-3">代表連絡先</th><th className="p-3 text-center">操作</th></tr></thead>
+                    <tbody className="divide-y">
+                      {activeMembers.map(m => (
+                        <tr key={m.id} className={`hover:bg-slate-50 ${m.status==='new'?'bg-emerald-50/50':''}`}>
+                          <td className="p-3 font-bold"><div className="text-[10px] text-slate-400 font-normal">{m.kana}</div>{m.name}</td>
+                          <td className="p-3 text-center"><span className="bg-slate-100 px-2 py-1 rounded-full text-xs font-bold">{m.grade}</span></td>
+                          <td className="p-3 font-mono text-xs">{m.parentMotherPhone || m.parentFatherPhone || '-'}</td>
+                          <td className="p-3 text-center">
+                            <div className="flex justify-center items-center gap-2">
+                              <button onClick={() => onPrint(m)} className="text-slate-400 hover:text-blue-600 p-2" title="印刷"><Printer size={18}/></button>
+                              <button onClick={() => requestDeleteMember(m)} className="text-slate-400 hover:text-rose-600 p-2" title="削除"><Trash2 size={18}/></button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              
+              {inactiveMembers.length > 0 && (
+                <div className="bg-slate-100 rounded-3xl border border-slate-200 p-6 no-print">
+                  <h2 className="font-bold text-slate-500 mb-4 flex items-center"><LogOut size={16} className="mr-2"/>退会者一覧 ({inactiveMembers.length}名)</h2>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-sm whitespace-nowrap opacity-75">
+                      <thead><tr className="border-b border-slate-300"><th className="pb-2">氏名</th><th className="pb-2">退会理由</th><th className="pb-2 text-center">操作</th></tr></thead>
+                      <tbody className="divide-y divide-slate-200">
+                        {inactiveMembers.map(m => (
+                          <tr key={m.id}>
+                            <td className="py-3 font-bold">{m.name}</td>
+                            <td className="py-3 text-xs truncate max-w-[200px]">{m.leaveReason || '-'}</td>
+                            <td className="py-3 text-center">
+                              <div className="flex justify-center gap-2">
+                                <button onClick={() => onPrint(m)} className="text-slate-400 hover:text-slate-700 p-2" title="退会届を印刷"><Printer size={16}/></button>
+                                <button onClick={() => requestDeleteMember(m)} className="text-slate-400 hover:text-rose-600 p-2" title="完全削除"><Trash2 size={16}/></button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {tab === 'money' && (
+            <div className="bg-white rounded-3xl border p-6">
+              <h2 className="font-bold text-xl mb-6 border-l-4 border-blue-500 pl-3">集金チェック</h2>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs border-collapse">
+                  <thead className="bg-slate-50 sticky top-0 z-10"><tr><th className="p-3 border text-left">氏名</th>{['入会','前期','後期','競技','保険'].map(h=><th key={h} className="p-2 border">{h}</th>)}</tr></thead>
+                  <tbody className="divide-y">
+                    {activeMembers.filter(m=>!m.grade.includes('OB')).map(m => (
+                      <tr key={m.id}>
+                        <td className="p-3 border font-bold">{m.name}<div className="text-[9px] font-normal text-slate-400">{m.grade}</div></td>
+                        {['entrance','term1','term2','track','insurance'].map(f => (
+                          <td key={f} className="p-1 border text-center">
+                            <button onClick={async () => {
+                              try {
+                                if(!m.id) throw new Error("IDがありません。再読み込みしてください。");
+                                await updateDoc(getDocRef('members', m.id), {[`payments.${f}`]: !m.payments?.[f]});
+                              } catch(e) {
+                                setConfirmDialog({ message: `変更に失敗しました。\n\n【エラー原因】\n${e.message}`, onConfirm: null, isInfo: true });
+                              }
+                            }} className={`w-8 h-8 rounded-full font-bold transition-all ${m.payments?.[f] ? 'bg-blue-600 text-white shadow' : 'bg-slate-100 text-slate-300'}`}>
+                              {m.payments?.[f] ? '済' : '未'}
+                            </button>
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {tab === 'tour' && (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              <div className="lg:col-span-2 space-y-4">
+                {tournaments.length === 0 ? <div className="p-8 text-center text-slate-400 bg-white rounded-3xl border border-dashed">大会はありません</div> : tournaments.map(t => (
+                  <div key={t.id} className="bg-white p-6 rounded-2xl border shadow-sm">
+                    <div className="flex justify-between items-center mb-4"><h3 className="font-bold text-lg">{t.name}</h3><button onClick={() => deleteDoc(getDocRef('tournaments', t.id))} className="text-slate-300 hover:text-rose-500"><Trash2 size={18}/></button></div>
+                    <div className="bg-slate-50 p-4 rounded-xl space-y-2">
+                      {entries.filter(e => e.tournamentId === t.id).map(e => (
+                        <div key={e.id} className="flex justify-between items-center text-xs border-b pb-2">
+                          <span className="font-bold">{e.name} <span className="font-normal text-slate-400">({e.events.join(',')})</span></span>
+                          <button onClick={()=>updateDoc(getDocRef('entries', e.id),{isPaid:!e.isPaid,receivedBy:!e.isPaid?adminName:''})} className={`px-3 py-1 rounded-full font-bold shadow-sm ${e.isPaid ? 'bg-amber-100 text-amber-700' : 'bg-white border text-slate-300'}`}>
+                            {e.isPaid ? `${e.receivedBy}受領` : '未入金'}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="bg-slate-800 text-white p-6 rounded-3xl h-fit sticky top-24">
+                <h3 className="font-bold mb-4 text-sm flex items-center"><Trophy size={16} className="text-amber-400 mr-2"/>大会の追加</h3>
+                <form onSubmit={(e)=>{e.preventDefault(); const fd=new FormData(e.target); addDoc(getColRef('tournaments'),{name:fd.get('n'),eventFee:Number(fd.get('f')),events:fd.get('ev').split(',').map(s=>s.trim())}); e.target.reset();}} className="space-y-3">
+                  <input name="n" placeholder="大会名" required className="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" />
+                  <input name="f" type="number" placeholder="種目単価 (円)" required className="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" />
+                  <textarea name="ev" placeholder="種目 (カンマ区切り)" required className="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" rows="3" />
+                  <button type="submit" className="w-full bg-amber-500 text-slate-900 font-bold py-3 rounded-xl mt-2">登録</button>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {tab === 'set' && (
+            <div className="max-w-xl mx-auto space-y-6 animate-in fade-in">
+              <div className="bg-white p-8 rounded-3xl border shadow-sm">
+                <h3 className="font-bold mb-4 flex items-center"><Users size={18} className="mr-2 text-slate-400"/>役員名</h3>
+                <textarea className="w-full border rounded-xl p-4 text-sm font-bold bg-slate-50" rows="2" defaultValue={(officers || []).join(', ')} onBlur={(e) => setDoc(getDocRef('settings', 'officers'), {names: e.target.value.split(',').map(s=>s.trim()).filter(s=>s)})} />
+              </div>
+              <div className="bg-white p-8 rounded-3xl border shadow-sm">
+                <h3 className="font-bold mb-4 flex items-center"><Camera size={18} className="mr-2 text-emerald-500"/>AIスキャン APIキー</h3>
+                <input type="password" placeholder="AIza..." className="w-full border rounded-xl p-4 font-mono text-xs bg-slate-50" value={apiKey} onChange={e => {setApiKey(e.target.value); safeSetStorage('amuro_gemini_key', e.target.value);}} />
+              </div>
+              <div className="bg-rose-50 p-8 rounded-3xl border border-rose-100">
+                <h3 className="font-bold text-rose-800 mb-4"><GraduationCap size={18} className="inline mr-2"/>年度更新 (進級)</h3>
+                <button onClick={requestUpgradeGrade} className="w-full bg-rose-600 text-white font-bold py-4 rounded-xl shadow hover:bg-rose-700 transition-colors">一括進級処理を実行</button>
+              </div>
+              <button onClick={onLogout} className="w-full py-4 text-slate-400 text-sm font-bold underline">ログアウト</button>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // --- 印刷用テンプレート (PDFレイアウトの完全再現) ---
+    function PrintTemplate({ member, onClose }) {
+      const d = new Date().toLocaleDateString('ja-JP');
+      return (
+        <div className="fixed inset-0 bg-slate-900/90 z-[100] flex justify-center py-4 overflow-y-auto no-print:py-2">
+          <div id="print-root" className="bg-white w-[210mm] min-h-[297mm] p-12 shadow-2xl relative text-black text-[13px] font-sans">
+            <div className="no-print absolute top-4 right-4 flex gap-2">
+              <button onClick={() => window.print()} className="bg-emerald-600 text-white px-6 py-2 rounded-xl font-bold shadow-lg flex items-center"><Printer size={16} className="mr-2"/>印刷</button>
+              <button onClick={onClose} className="bg-slate-200 px-6 py-2 rounded-xl text-slate-700 font-bold">閉じる</button>
+            </div>
+            
+            <div className="text-right text-[11px] mb-1">※2026年度</div>
+            <div className="font-bold text-[14px] mb-4">あむろ ランニングクラブ</div>
+            
+            <div className="flex justify-between items-end mb-4 border-b-2 border-black pb-2">
+              <h1 className="text-[26px] font-bold tracking-[0.2em]">安室RC 入会・更新書</h1>
+              <div className="text-right text-[12px] font-bold">
+                <div className="mb-1">新規・更新・退会 (どれかに○)</div>
+                <div>提出日 西暦 <span className="underline underline-offset-4">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{d}&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span></div>
+              </div>
+            </div>
+            
+            <table className="w-full border-collapse border-[1.5px] border-black mb-4 table-fixed">
+              <tbody>
+                <tr>
+                  <td className="border border-black print-bg-gray bg-gray-100 p-2 text-center font-bold text-sm w-[20%]">ふりがな<br/>氏名</td>
+                  <td className="border border-black p-2 w-[35%]">
+                    <div className="text-[10px] mb-1">{member.kana}</div>
+                    <div className="text-xl font-bold">{member.name}</div>
+                  </td>
+                  <td className="border border-black print-bg-gray bg-gray-100 p-2 text-center font-bold text-sm w-[15%]">希望種目</td>
+                  <td className="border border-black p-2 w-[30%] font-bold text-xs text-center">
+                    <div className="mb-1 text-[10px] font-normal text-left">どちらかに○</div>
+                    {member.eventType || '短距離 ・ 長距離'}
+                  </td>
+                </tr>
+                <tr>
+                  <td className="border border-black print-bg-gray bg-gray-100 p-2 text-center font-bold text-sm">子供の氏名<br/><br/>生年月日</td>
+                  <td className="border border-black p-2 font-bold align-bottom">
+                    <div className="text-lg mb-2">{member.name}</div>
+                    <div className="text-sm">{member.birthDate || '　　年　　月　　日'}</div>
+                  </td>
+                  <td className="border border-black print-bg-gray bg-gray-100 p-2 text-center font-bold text-sm align-bottom">年齢</td>
+                  <td className="border border-black p-2 font-bold align-bottom text-right pr-4">
+                    {member.age || '　　'} 歳
+                  </td>
+                </tr>
+                <tr>
+                  <td className="border border-black print-bg-gray bg-gray-100 p-2 text-center font-bold text-sm">学校(学年)<br/><span className="text-[10px] font-normal">※2026年度の学年を記入下さい。<br/>(　年)</span></td>
+                  <td className="border border-black p-2 font-bold text-sm align-top">{member.schoolName} ({member.grade})</td>
+                  <td className="border border-black print-bg-gray bg-gray-100 p-2 text-center font-bold text-sm">性別</td>
+                  <td className="border border-black p-2 font-bold text-center">
+                    <div className="flex justify-center items-center h-full">
+                       <span className={member.gender === '男' ? 'border border-black rounded-full px-2 py-1' : 'px-2 py-1'}>男</span>
+                       <span className="mx-2"></span>
+                       <span className={member.gender === '女' ? 'border border-black rounded-full px-2 py-1' : 'px-2 py-1'}>女</span>
+                    </div>
+                  </td>
+                </tr>
+                
+                <tr>
+                  <td className="border border-black print-bg-gray bg-gray-100 p-2 text-center font-bold text-sm">保護者1<br/>(父など)<br/><br/>メールアドレス</td>
+                  <td className="border border-black p-2 font-bold align-top">
+                    <div className="mb-2">氏名：{member.parentFatherName}</div>
+                    <div className="text-[11px] font-normal">{member.parentFatherEmail}</div>
+                  </td>
+                  <td className="border border-black print-bg-gray bg-gray-100 p-2 text-center font-bold text-sm align-top">携帯電話</td>
+                  <td className="border border-black p-2 font-bold font-mono text-lg align-top">{member.parentFatherPhone}</td>
+                </tr>
+                <tr>
+                  <td className="border border-black print-bg-gray bg-gray-100 p-2 text-center font-bold text-sm">保護者2<br/>(母など)<br/><br/>メールアドレス</td>
+                  <td className="border border-black p-2 font-bold align-top">
+                    <div className="mb-2">氏名：{member.parentMotherName}</div>
+                    <div className="text-[11px] font-normal">{member.parentMotherEmail}</div>
+                  </td>
+                  <td className="border border-black print-bg-gray bg-gray-100 p-2 text-center font-bold text-sm align-top">携帯電話</td>
+                  <td className="border border-black p-2 font-bold font-mono text-lg align-top">{member.parentMotherPhone}</td>
+                </tr>
+
+                <tr>
+                  <td className="border border-black print-bg-gray bg-gray-100 p-2 text-center font-bold text-sm">〒</td>
+                  <td colSpan="3" className="border border-black p-2 font-bold">{member.postalCode}</td>
+                </tr>
+                <tr>
+                  <td className="border border-black print-bg-gray bg-gray-100 p-2 text-center font-bold text-sm">現住所</td>
+                  <td colSpan="3" className="border border-black p-2 font-bold">{member.address}</td>
+                </tr>
+                <tr>
+                  <td className="border border-black print-bg-gray bg-gray-100 p-2 text-center font-bold text-sm">自宅電話</td>
+                  <td className="border border-black p-2 font-bold font-mono">{member.homePhone}</td>
+                  <td className="border border-black print-bg-gray bg-gray-100 p-2 text-center font-bold text-sm">自宅FAX</td>
+                  <td className="border border-black p-2 font-bold font-mono">{member.fax}</td>
+                </tr>
+                <tr>
+                  <td className="border border-black print-bg-gray bg-gray-100 p-2 text-center font-bold text-sm">健康状態<br/><span className="text-[11px] font-normal">(血液型 {member.bloodType} )</span></td>
+                  <td className="border border-black p-2 font-bold">{member.health}</td>
+                  <td className="border border-black print-bg-gray bg-gray-100 p-2 text-center font-bold text-sm">身長</td>
+                  <td className="border border-black p-2 font-bold text-right pr-4">{member.height ? member.height + ' cm' : '　　cm'}</td>
+                </tr>
+                <tr>
+                  <td className="border border-black print-bg-gray bg-gray-100 p-2 text-center w-[20%] font-bold text-sm">通達事項等<br/><span className="text-[10px] font-normal">(アレルギー体質等)</span></td>
+                  <td colSpan="3" className="border border-black p-2 min-h-[40px] font-bold text-sm whitespace-pre-wrap">{member.notes}</td>
+                </tr>
+                <tr>
+                  <td className="border border-black print-bg-gray bg-gray-100 p-2 text-center w-[20%] font-bold text-sm">クラブチーム<br/>への要望</td>
+                  <td colSpan="3" className="border border-black p-2 min-h-[40px] font-bold text-sm whitespace-pre-wrap">{member.requests}</td>
+                </tr>
+                <tr>
+                  <td className="border border-black print-bg-gray bg-gray-100 p-2 text-center w-[20%] font-bold text-sm">クラブチーム<br/>での目標</td>
+                  <td colSpan="3" className="border border-black p-2 min-h-[40px] font-bold text-sm whitespace-pre-wrap">{member.goals}</td>
+                </tr>
+              </tbody>
+            </table>
+            
+            <div className="font-bold text-sm mb-4 border border-black p-2">
+               スポーツ保険の加入区分 <span className="ml-4 mr-2">子供</span> {member.insurance?.includes('子供') ? '○' : '　'} A1 AW <span className="ml-8 mr-2">大人</span> {member.insurance?.includes('大人') ? '○' : '　'} A2C B
+            </div>
+            
+            <div className="flex justify-between items-end mt-4">
+              <div className="text-[12px] leading-relaxed">
+                <span className="font-bold text-[14px]">※入会と同時に会則に同意致します。</span><br/><br/>
+                ※上記データーはこの会の運営に関する以外、外部に漏洩させないことをお約束致します。<br/><br/>
+                受付日 西暦 　　　年 　　月 　　日<br/><br/>
+                注意事項: ご連絡用の電話番号(または携帯)と保護者のメールアドレスは必須でお願いします。<br/>
+                　　　　: スポーツ保険加入区分は別紙『スポーツ安全保険』のしおりを熟読下さい。
+              </div>
+              <table className="border-collapse border-[1.5px] border-black w-48 text-center text-sm">
+                <tbody>
+                  <tr>
+                    <td className="border border-black p-1 w-1/2">氏名</td>
+                    <td className="border border-black print-bg-gray bg-gray-100 p-1 w-1/2">受付者</td>
+                  </tr>
+                  <tr>
+                    <td className="border border-black h-20"></td>
+                    <td className="border border-black h-20"></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    
+    const root = createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
