@@ -125,11 +125,10 @@
 
         const to = setTimeout(() => setLoading(false), 2000); 
         
-        // データを読み込むとき、確実に「Firebaseの正しいID」を割り当てる
         const unsubMembers = onSnapshot(getColRef('members'), (snap) => {
           setMembers(snap.docs.map(d => {
             const data = d.data();
-            return { ...data, id: d.id }; // 必ず最後にIDを上書きする
+            return { ...data, id: d.id }; 
           }));
           setLoading(false); clearTimeout(to);
         }, err => { console.error("DB Error:", err); setLoading(false); });
@@ -143,7 +142,7 @@
 
       const handleSaveMember = async (data, isNew) => {
         try {
-          const { id, ...saveData } = data; // 保存するときはアプリ側のIDを抜く
+          const { id, ...saveData } = data; 
           if (isNew) {
             await addDoc(getColRef('members'), { ...saveData, createdAt: Date.now() });
           } else {
@@ -169,9 +168,8 @@
             <div className="max-w-5xl mx-auto flex justify-between items-center">
               <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setView('portal')}>
                 <Home className="text-blue-400" size={20} />
-                {/* ★追加：最新版か確認するための「v1.1」バッジ */}
                 <h1 className="text-xl font-bold tracking-widest flex items-end">
-                  安室RC ポータル <span className="text-[10px] font-normal text-blue-300 ml-2 mb-1 tracking-normal">v1.1</span>
+                  安室RC ポータル <span className="text-[10px] font-normal text-blue-300 ml-2 mb-1 tracking-normal">v1.2</span>
                 </h1>
               </div>
               <div className="flex items-center space-x-3">
@@ -428,18 +426,48 @@
     function EntryForm({ members, tournaments, setView }) {
       const [tid, setTid] = useState(tournaments[0]?.id || '');
       const [mid, setMid] = useState('');
-      const [evs, setEvs] = useState([]);
+      const [evs, setEvs] = useState([]); // 選択された種目オブジェクトの配列
       const tour = tournaments.find(t=>t.id===tid);
       const mem = members.find(m=>m.id===mid);
       const [done, setDone] = useState(false);
 
+      // 大会が切り替わったら選択状況をリセット
+      useEffect(() => { setEvs([]); }, [tid]);
+
+      // 過去のデータ構造（文字列配列）にも対応するための安全なリスト作成
+      const eventList = useMemo(() => {
+        if (!tour) return [];
+        return (tour.events || []).map(ev => {
+          if (typeof ev === 'string') return { name: ev, fee: tour.eventFee || 0 };
+          return ev;
+        });
+      }, [tour]);
+
+      const handleToggleEvent = (ev) => {
+        if (evs.some(e => e.name === ev.name)) {
+          setEvs(evs.filter(e => e.name !== ev.name));
+        } else {
+          setEvs([...evs, ev]);
+        }
+      };
+
+      const totalFee = evs.reduce((sum, ev) => sum + Number(ev.fee), 0);
+
       const handleSubmit = async (e) => {
         e.preventDefault();
-        await addDoc(getColRef('entries'), { tournamentId:tid, memberId:mid, name:mem.name, events:evs, fee:evs.length*tour.eventFee, isPaid:false, createdAt:Date.now() });
+        await addDoc(getColRef('entries'), { 
+          tournamentId: tid, 
+          memberId: mid, 
+          name: mem.name, 
+          events: evs.map(e => e.name), 
+          fee: totalFee, 
+          isPaid: false, 
+          createdAt: Date.now() 
+        });
         setDone(true);
       };
 
-      if (done) return <div className="max-w-md mx-auto p-12 bg-white rounded-3xl shadow-lg border text-center"><CheckCircle2 className="mx-auto text-green-500 w-20 h-20 mb-6"/><h2 className="text-2xl font-bold mb-4">エントリー完了</h2><button onClick={()=>setView('portal')} className="w-full bg-slate-800 text-white font-bold py-4 rounded-xl mt-4">戻る</button></div>;
+      if (done) return <div className="max-w-md mx-auto p-12 bg-white rounded-3xl shadow-lg border text-center"><CheckCircle2 className="mx-auto text-emerald-500 w-20 h-20 mb-6"/><h2 className="text-2xl font-bold mb-4">エントリー完了</h2><button onClick={()=>setView('portal')} className="w-full bg-slate-800 text-white font-bold py-4 rounded-xl mt-4">戻る</button></div>;
 
       return (
         <div className="max-w-xl mx-auto space-y-6">
@@ -448,17 +476,37 @@
              <button onClick={() => setView('portal')} className="text-sm text-slate-500 bg-white px-4 py-2 rounded-xl border shadow-sm">戻る</button>
           </div>
           <div className="bg-white p-8 rounded-3xl shadow-sm border space-y-6">
-            <select className="w-full p-4 border rounded-xl font-bold bg-slate-50" value={tid} onChange={e=>setTid(e.target.value)}>{tournaments.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</select>
-            <select className="w-full p-4 border rounded-xl font-bold" value={mid} onChange={e=>setMid(e.target.value)}><option value="">-- 選手を選択 --</option>{members.map(m=><option key={m.id} value={m.id}>{m.grade} | {m.name}</option>)}</select>
+            <select className="w-full p-4 border rounded-xl font-bold bg-slate-50" value={tid} onChange={e=>setTid(e.target.value)}>
+              {tournaments.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+            <select className="w-full p-4 border rounded-xl font-bold" value={mid} onChange={e=>setMid(e.target.value)}>
+              <option value="">-- 選手を選択 --</option>
+              {members.map(m=><option key={m.id} value={m.id}>{m.grade} | {m.name}</option>)}
+            </select>
+            
             {tour && mid && (
-              <div className="space-y-6">
+              <div className="space-y-6 animate-in fade-in">
                 <div className="font-bold text-slate-700">出場種目を選択</div>
-                <div className="flex flex-wrap gap-2">
-                  {tour.events.map(ev => <button key={ev} onClick={()=>setEvs(p=>p.includes(ev)?p.filter(x=>x!==ev):[...p,ev])} className={`px-5 py-2.5 rounded-full font-bold text-sm border-2 transition-all ${evs.includes(ev)?'bg-blue-600 text-white border-blue-600':'bg-white text-slate-400 border-slate-200'}`}>{ev}</button>)}
+                <div className="flex flex-wrap gap-3">
+                  {eventList.map((ev, idx) => {
+                    const isSelected = evs.some(e => e.name === ev.name);
+                    return (
+                      <button key={idx} type="button" onClick={()=>handleToggleEvent(ev)} className={`px-5 py-3 rounded-2xl font-bold text-sm border-2 transition-all flex flex-col items-start ${isSelected ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white text-slate-500 border-slate-200 hover:border-blue-300'}`}>
+                        <span>{ev.name}</span>
+                        <span className={`text-xs mt-1 ${isSelected ? 'text-blue-200' : 'text-slate-400'}`}>¥{Number(ev.fee).toLocaleString()}</span>
+                      </button>
+                    );
+                  })}
                 </div>
-                <div className="p-6 bg-slate-800 rounded-xl text-white flex justify-between items-center shadow-lg">
-                  <div><span className="text-xs text-slate-400 block mb-1">合計予定額</span><span className="text-3xl font-bold text-amber-400">¥{(evs.length * tour.eventFee).toLocaleString()}</span></div>
-                  <button onClick={handleSubmit} className="bg-blue-500 px-8 py-4 rounded-xl font-bold">申し込む</button>
+                
+                <div className="p-6 bg-slate-800 rounded-2xl text-white flex justify-between items-center shadow-lg">
+                  <div>
+                    <span className="text-xs text-slate-400 block mb-1">合計予定額</span>
+                    <span className="text-3xl font-bold text-amber-400">¥{totalFee.toLocaleString()}</span>
+                  </div>
+                  <button onClick={handleSubmit} disabled={evs.length===0} className={`px-8 py-4 rounded-xl font-bold transition-colors ${evs.length>0 ? 'bg-blue-500 hover:bg-blue-600' : 'bg-slate-700 text-slate-500 cursor-not-allowed'}`}>
+                    申し込む
+                  </button>
                 </div>
               </div>
             )}
@@ -471,6 +519,10 @@
     function AdminDashboard({ db, members, entries, tournaments, officers, adminName, onLogout, onPrint, apiKey, setApiKey }) {
       const [tab, setTab] = useState('members');
       const [confirmDialog, setConfirmDialog] = useState(null); 
+      
+      // 大会追加用の新しいステート
+      const [newTourName, setNewTourName] = useState('');
+      const [newTourEvents, setNewTourEvents] = useState([{ name: '', fee: '' }]);
       
       const activeMembers = useMemo(() => members.filter(m => m.isActive).sort((a,b) => GRADES.indexOf(a.grade) - GRADES.indexOf(b.grade)), [members]);
       const inactiveMembers = useMemo(() => members.filter(m => !m.isActive), [members]);
@@ -501,6 +553,41 @@
         });
       };
 
+      const requestDeleteTournament = (t) => {
+        setConfirmDialog({
+          message: `大会「${t.name}」を一覧から削除しますか？\n※エントリー履歴は消えません。`,
+          onConfirm: async () => {
+            try {
+              if (!t || !t.id) throw new Error("IDが見つかりません。");
+              await deleteDoc(getDocRef('tournaments', t.id));
+              setTimeout(() => setConfirmDialog({ message: "大会を削除しました。", onConfirm: null, isInfo: true }), 300);
+            } catch (error) {
+              setTimeout(() => setConfirmDialog({ message: `削除に失敗しました。\n\n【エラー原因】\n${error.message}`, onConfirm: null, isInfo: true }), 300);
+            }
+          }
+        });
+      };
+
+      const handleCreateTournament = async () => {
+        if(!newTourName.trim()) { setConfirmDialog({message:"大会名を入力してください", onConfirm:null, isInfo:true}); return; }
+        
+        const validEvents = newTourEvents.filter(e => e.name.trim() !== '' && e.fee !== '');
+        if(validEvents.length === 0) { setConfirmDialog({message:"種目と金額を正しく入力してください", onConfirm:null, isInfo:true}); return; }
+        
+        try {
+          await addDoc(getColRef('tournaments'), {
+            name: newTourName.trim(),
+            events: validEvents.map(e => ({ name: e.name.trim(), fee: Number(e.fee) })),
+            createdAt: Date.now()
+          });
+          setNewTourName('');
+          setNewTourEvents([{name:'', fee:''}]);
+          setConfirmDialog({message:"大会を追加しました！", onConfirm:null, isInfo:true});
+        } catch(err) {
+          setConfirmDialog({message:`追加に失敗しました。\n\n${err.message}`, onConfirm:null, isInfo:true});
+        }
+      };
+
       const requestUpgradeGrade = () => {
         setConfirmDialog({
           message: "全員の学年を上げ、集金をリセットします。\n本当によろしいですか？",
@@ -528,7 +615,7 @@
           {/* カスタム確認モーダル */}
           {confirmDialog && (
             <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-[150] p-4">
-              <div className="bg-white p-6 rounded-2xl max-w-sm w-full shadow-2xl animate-in zoom-in">
+              <div className="bg-white p-6 rounded-3xl max-w-sm w-full shadow-2xl animate-in zoom-in">
                 <h3 className="font-bold text-lg mb-6 whitespace-pre-wrap">{confirmDialog.message}</h3>
                 <div className="flex justify-end gap-3">
                   {confirmDialog.isInfo ? (
@@ -641,32 +728,85 @@
           )}
 
           {tab === 'tour' && (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in">
               <div className="lg:col-span-2 space-y-4">
-                {tournaments.length === 0 ? <div className="p-8 text-center text-slate-400 bg-white rounded-3xl border border-dashed">大会はありません</div> : tournaments.map(t => (
-                  <div key={t.id} className="bg-white p-6 rounded-2xl border shadow-sm">
-                    <div className="flex justify-between items-center mb-4"><h3 className="font-bold text-lg">{t.name}</h3><button onClick={() => deleteDoc(getDocRef('tournaments', t.id))} className="text-slate-300 hover:text-rose-500"><Trash2 size={18}/></button></div>
-                    <div className="bg-slate-50 p-4 rounded-xl space-y-2">
+                {tournaments.length === 0 ? <div className="p-12 text-center text-slate-400 bg-white rounded-3xl border border-dashed font-bold">現在、登録されている大会はありません</div> : tournaments.map(t => (
+                  <div key={t.id} className="bg-white p-6 rounded-3xl border shadow-sm">
+                    <div className="flex justify-between items-start mb-6">
+                      <div>
+                        <h3 className="font-bold text-xl text-slate-800">{t.name}</h3>
+                        <div className="flex flex-wrap gap-2 mt-3">
+                          {(t.events || []).map((ev, idx) => {
+                            const isOld = typeof ev === 'string'; // 古いデータの互換性対応
+                            const name = isOld ? ev : ev.name;
+                            const fee = isOld ? t.eventFee : ev.fee;
+                            return (
+                              <span key={idx} className="text-xs bg-slate-50 border border-slate-200 text-slate-600 px-3 py-1.5 rounded-lg shadow-sm flex items-center gap-2">
+                                <span className="font-bold">{name}</span>
+                                <span className="text-slate-400">¥{Number(fee).toLocaleString()}</span>
+                              </span>
+                            );
+                          })}
+                        </div>
+                      </div>
+                      <button onClick={() => requestDeleteTournament(t)} className="text-slate-300 hover:text-rose-500 p-2 bg-slate-50 rounded-full"><Trash2 size={18}/></button>
+                    </div>
+                    
+                    <div className="bg-slate-50 p-4 rounded-2xl space-y-2">
                       {entries.filter(e => e.tournamentId === t.id).map(e => (
-                        <div key={e.id} className="flex justify-between items-center text-xs border-b pb-2">
-                          <span className="font-bold">{e.name} <span className="font-normal text-slate-400">({e.events.join(',')})</span></span>
-                          <button onClick={()=>updateDoc(getDocRef('entries', e.id),{isPaid:!e.isPaid,receivedBy:!e.isPaid?adminName:''})} className={`px-3 py-1 rounded-full font-bold shadow-sm ${e.isPaid ? 'bg-amber-100 text-amber-700' : 'bg-white border text-slate-300'}`}>
+                        <div key={e.id} className="flex justify-between items-center text-xs border-b border-slate-200 pb-3 mb-3 last:border-0 last:pb-0 last:mb-0">
+                          <div>
+                            <span className="font-bold text-sm text-slate-700">{e.name}</span>
+                            <span className="font-normal text-slate-500 block mt-1.5 leading-relaxed">
+                              {e.events.map((evName, idx) => (
+                                <span key={idx} className="inline-block bg-white border border-slate-200 rounded px-2 py-0.5 mr-1 mb-1 shadow-sm">{evName}</span>
+                              ))}
+                              <span className="font-bold text-amber-600 ml-2 inline-block">¥{(e.fee || 0).toLocaleString()}</span>
+                            </span>
+                          </div>
+                          <button onClick={()=>updateDoc(getDocRef('entries', e.id),{isPaid:!e.isPaid,receivedBy:!e.isPaid?adminName:''})} className={`px-4 py-2.5 rounded-xl font-bold shadow-sm whitespace-nowrap transition-colors ${e.isPaid ? 'bg-emerald-100 text-emerald-700 border border-emerald-200' : 'bg-white border border-slate-300 text-slate-400 hover:bg-slate-100'}`}>
                             {e.isPaid ? `${e.receivedBy}受領` : '未入金'}
                           </button>
                         </div>
                       ))}
+                      {entries.filter(e => e.tournamentId === t.id).length === 0 && (
+                         <div className="text-center text-slate-400 py-4 text-xs font-bold">まだエントリーはありません</div>
+                      )}
                     </div>
                   </div>
                 ))}
               </div>
-              <div className="bg-slate-800 text-white p-6 rounded-3xl h-fit sticky top-24">
-                <h3 className="font-bold mb-4 text-sm flex items-center"><Trophy size={16} className="text-amber-400 mr-2"/>大会の追加</h3>
-                <form onSubmit={(e)=>{e.preventDefault(); const fd=new FormData(e.target); addDoc(getColRef('tournaments'),{name:fd.get('n'),eventFee:Number(fd.get('f')),events:fd.get('ev').split(',').map(s=>s.trim())}); e.target.reset();}} className="space-y-3">
-                  <input name="n" placeholder="大会名" required className="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" />
-                  <input name="f" type="number" placeholder="種目単価 (円)" required className="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" />
-                  <textarea name="ev" placeholder="種目 (カンマ区切り)" required className="w-full bg-slate-900 border-slate-700 rounded-xl p-3 text-sm" rows="3" />
-                  <button type="submit" className="w-full bg-amber-500 text-slate-900 font-bold py-3 rounded-xl mt-2">登録</button>
-                </form>
+              
+              <div className="bg-slate-800 text-white p-6 rounded-3xl h-fit sticky top-24 shadow-lg">
+                <h3 className="font-bold mb-5 text-sm flex items-center"><Trophy size={18} className="text-amber-400 mr-2"/>大会の追加</h3>
+                <div className="space-y-5">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-400 mb-1.5 ml-1">大会名</label>
+                    <input value={newTourName} onChange={e=>setNewTourName(e.target.value)} placeholder="例: 姫路市大会" className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3.5 text-sm text-white focus:outline-none focus:border-blue-500 font-bold" />
+                  </div>
+                  
+                  <div>
+                    <label className="block text-xs font-bold text-slate-400 mb-2 ml-1">種目と参加費</label>
+                    <div className="space-y-2">
+                      {newTourEvents.map((ev, idx) => (
+                        <div key={idx} className="flex gap-2 relative group items-center">
+                          <input value={ev.name} onChange={e=>{const newEvs=[...newTourEvents]; newEvs[idx].name=e.target.value; setNewTourEvents(newEvs);}} placeholder="種目名 (例: 100m)" className="flex-1 bg-slate-900 border border-slate-700 rounded-xl p-3.5 text-sm text-white focus:outline-none focus:border-blue-500 min-w-0" />
+                          <div className="relative w-28 shrink-0">
+                            <input type="number" value={ev.fee} onChange={e=>{const newEvs=[...newTourEvents]; newEvs[idx].fee=e.target.value; setNewTourEvents(newEvs);}} placeholder="金額" className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3.5 pr-6 text-sm text-white text-right focus:outline-none focus:border-blue-500" />
+                            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-500">円</span>
+                          </div>
+                          <div className="w-8 shrink-0 flex justify-center">
+                            {newTourEvents.length > 1 && (
+                              <button onClick={()=>setNewTourEvents(newTourEvents.filter((_, i)=>i!==idx))} className="text-slate-500 hover:text-rose-400 p-1 bg-slate-800 rounded-full"><X size={18}/></button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <button onClick={()=>setNewTourEvents([...newTourEvents, {name:'', fee:''}])} className="text-xs text-blue-300 font-bold p-3.5 hover:bg-slate-700 rounded-xl w-full text-center mt-3 border border-dashed border-slate-600 transition-colors">＋ 種目を追加する</button>
+                  </div>
+                  <button onClick={handleCreateTournament} className="w-full bg-amber-500 text-slate-900 font-bold py-4 rounded-xl mt-6 shadow-lg hover:bg-amber-400 transition-colors">この大会を登録する</button>
+                </div>
               </div>
             </div>
           )}
