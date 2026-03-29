@@ -50,7 +50,7 @@
     import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
     
     import { 
-      Users, Lock, UserPlus, Banknote, Trophy, ChevronRight, 
+      Users, Lock, UserPlus, Banknote, Trophy, ChevronRight, ChevronUp, ChevronDown, Filter, ArrowUpDown,
       FileText, LogOut, CheckCircle2, Home, Settings, 
       Trash2, Download, Camera, Printer, X, GraduationCap
     } from 'lucide-react';
@@ -169,7 +169,7 @@
               <div className="flex items-center space-x-2 cursor-pointer" onClick={() => setView('portal')}>
                 <Home className="text-blue-400" size={20} />
                 <h1 className="text-xl font-bold tracking-widest flex items-end">
-                  安室RC ポータル <span className="text-[10px] font-normal text-blue-300 ml-2 mb-1 tracking-normal">v1.2</span>
+                  安室RC ポータル <span className="text-[10px] font-normal text-blue-300 ml-2 mb-1 tracking-normal">v1.4</span>
                 </h1>
               </div>
               <div className="flex items-center space-x-3">
@@ -273,7 +273,9 @@
           }
         }
 
-        const data = isLeave ? { id: mid, isActive: false, status: 'leaved', leaveReason: f.leaveReason } : { id: mid, ...f, isActive: true, status: type };
+        const data = isLeave 
+          ? { id: mid, isActive: false, status: 'leaved', leaveReason: f.leaveReason, approvedBy: null } 
+          : { id: mid, ...f, isActive: true, status: type, approvedBy: null };
         
         try {
           await onSave(data, type === 'new');
@@ -426,15 +428,13 @@
     function EntryForm({ members, tournaments, setView }) {
       const [tid, setTid] = useState(tournaments[0]?.id || '');
       const [mid, setMid] = useState('');
-      const [evs, setEvs] = useState([]); // 選択された種目オブジェクトの配列
+      const [evs, setEvs] = useState([]);
       const tour = tournaments.find(t=>t.id===tid);
       const mem = members.find(m=>m.id===mid);
       const [done, setDone] = useState(false);
 
-      // 大会が切り替わったら選択状況をリセット
       useEffect(() => { setEvs([]); }, [tid]);
 
-      // 過去のデータ構造（文字列配列）にも対応するための安全なリスト作成
       const eventList = useMemo(() => {
         if (!tour) return [];
         return (tour.events || []).map(ev => {
@@ -520,21 +520,85 @@
       const [tab, setTab] = useState('members');
       const [confirmDialog, setConfirmDialog] = useState(null); 
       
-      // 大会追加用の新しいステート
       const [newTourName, setNewTourName] = useState('');
       const [newTourEvents, setNewTourEvents] = useState([{ name: '', fee: '' }]);
       
-      const activeMembers = useMemo(() => members.filter(m => m.isActive).sort((a,b) => GRADES.indexOf(a.grade) - GRADES.indexOf(b.grade)), [members]);
+      // ★ 追加: フィルターとソートのための状態管理
+      const [filterGrade, setFilterGrade] = useState('ALL');
+      const [sortConfig, setSortConfig] = useState({ key: 'grade', direction: 'asc' });
+
+      const activeMembers = useMemo(() => members.filter(m => m.isActive), [members]);
       const inactiveMembers = useMemo(() => members.filter(m => !m.isActive), [members]);
-      
+
+      // ★ 追加: ソートの向きを切り替える関数
+      const handleSort = (key) => {
+        let direction = 'asc';
+        if (sortConfig.key === key && sortConfig.direction === 'asc') direction = 'desc';
+        setSortConfig({ key, direction });
+      };
+
+      // ★ 追加: フィルターとソートが適用された表示用リスト
+      const displayMembers = useMemo(() => {
+        let list = [...activeMembers];
+        
+        // 学年フィルター
+        if (filterGrade !== 'ALL') {
+          list = list.filter(m => m.grade === filterGrade);
+        }
+        
+        // ソート処理
+        list.sort((a, b) => {
+          if (sortConfig.key === 'grade') {
+            const aIdx = GRADES.indexOf(a.grade);
+            const bIdx = GRADES.indexOf(b.grade);
+            return sortConfig.direction === 'asc' ? aIdx - bIdx : bIdx - aIdx;
+          } else if (sortConfig.key === 'name') {
+            const aName = a.kana || a.name || '';
+            const bName = b.kana || b.name || '';
+            return sortConfig.direction === 'asc' ? aName.localeCompare(bName, 'ja') : bName.localeCompare(aName, 'ja');
+          }
+          return 0;
+        });
+        
+        return list;
+      }, [activeMembers, filterGrade, sortConfig]);
+
       const downloadCSV = () => {
         const BOM = "\uFEFF";
         let csv = "氏名,ふりがな,学年,性別,学校名,保護者父,携帯父,メール父,保護者母,携帯母,メール母,住所,健康,保険区分\n";
-        activeMembers.forEach(m => {
+        
+        // ★ 修正: 画面に表示されているリスト(フィルター済み)をダウンロードするように変更
+        displayMembers.forEach(m => {
           csv += `${m.name},${m.kana||''},${m.grade},${m.gender},${m.schoolName||''},${m.parentFatherName||''},${m.parentFatherPhone||''},${m.parentFatherEmail||''},${m.parentMotherName||''},${m.parentMotherPhone||''},${m.parentMotherEmail||''},${m.address||''},${m.health||''},${m.insurance||''}\n`;
         });
         const blob = new Blob([BOM + csv], { type: 'text/csv;charset=utf-8;' });
         const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `安室RC名簿.csv`; a.click();
+      };
+
+      const requestApprove = (m, typeName) => {
+        setConfirmDialog({
+          message: `${m.name} 選手の「${typeName}」申請を確認済みにしますか？\n（確認者: ${adminName} 役員）`,
+          onConfirm: async () => {
+            try {
+              await updateDoc(getDocRef('members', m.id), { status: 'active', approvedBy: adminName, approvedAt: Date.now() });
+            } catch (err) {
+              setTimeout(() => setConfirmDialog({ message: `エラーが発生しました。\n${err.message}`, onConfirm: null, isInfo: true }), 300);
+            }
+          }
+        });
+      };
+
+      const requestApproveLeave = (m) => {
+        setConfirmDialog({
+          message: `${m.name} 選手の「退会」申請を確認済みにしますか？\n（確認者: ${adminName} 役員）`,
+          onConfirm: async () => {
+            try {
+              await updateDoc(getDocRef('members', m.id), { approvedBy: adminName, approvedAt: Date.now() });
+            } catch (err) {
+              setTimeout(() => setConfirmDialog({ message: `エラーが発生しました。\n${err.message}`, onConfirm: null, isInfo: true }), 300);
+            }
+          }
+        });
       };
 
       const requestDeleteMember = (m) => {
@@ -570,7 +634,6 @@
 
       const handleCreateTournament = async () => {
         if(!newTourName.trim()) { setConfirmDialog({message:"大会名を入力してください", onConfirm:null, isInfo:true}); return; }
-        
         const validEvents = newTourEvents.filter(e => e.name.trim() !== '' && e.fee !== '');
         if(validEvents.length === 0) { setConfirmDialog({message:"種目と金額を正しく入力してください", onConfirm:null, isInfo:true}); return; }
         
@@ -597,7 +660,19 @@
                 if (!m.id) return Promise.resolve();
                 let ng = m.grade;
                 switch(m.grade){case'1年':ng='2年';break;case'2年':ng='3年';break;case'3年':ng='4年';break;case'4年':ng='5年';break;case'5年':ng='6年';break;case'6年':ng='中学1年(OB/OG)';break;case'中学1年(OB/OG)':ng='中学2年(OB/OG)';break;case'中学2年(OB/OG)':ng='中学3年(OB/OG)';break;case'中学3年(OB/OG)':ng='高校生以上(OB/OG)';break;}
-                return updateDoc(getDocRef('members', m.id), { grade:ng, status:'updated', payments:{term1:false,term2:false,track:false,insurance:false} });
+                
+                return updateDoc(getDocRef('members', m.id), { 
+                  grade: ng, 
+                  status: 'active', 
+                  'payments.term1': false,
+                  'payments.term2': false,
+                  'payments.track': false,
+                  'payments.insurance': false,
+                  'paymentReceivers.term1': null,
+                  'paymentReceivers.term2': null,
+                  'paymentReceivers.track': null,
+                  'paymentReceivers.insurance': null
+                });
               });
               await Promise.all(promises);
               setTimeout(() => setConfirmDialog({ message: "進級処理が完了しました。", onConfirm: null, isInfo: true }), 300);
@@ -611,8 +686,6 @@
 
       return (
         <div className="space-y-6 relative">
-          
-          {/* カスタム確認モーダル */}
           {confirmDialog && (
             <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-[150] p-4">
               <div className="bg-white p-6 rounded-3xl max-w-sm w-full shadow-2xl animate-in zoom-in">
@@ -642,19 +715,64 @@
           {tab === 'members' && (
             <div className="space-y-6 animate-in fade-in">
               <div className="bg-white rounded-3xl shadow-sm border p-6">
-                <div className="flex justify-between items-center mb-6">
-                  <h2 className="font-bold text-xl border-l-4 border-emerald-500 pl-3">在籍名簿 ({activeMembers.length}名)</h2>
-                  <button onClick={downloadCSV} className="text-xs bg-slate-100 px-4 py-2 rounded-xl font-bold hover:bg-slate-200 flex items-center"><Download size={14} className="mr-1"/>CSV出力</button>
+                
+                {/* ★変更: タイトル横にフィルターとCSVボタンを配置 */}
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
+                  <h2 className="font-bold text-xl border-l-4 border-emerald-500 pl-3">在籍名簿 ({displayMembers.length}名)</h2>
+                  <div className="flex flex-wrap gap-2 w-full sm:w-auto">
+                    <div className="flex items-center bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 flex-1 sm:flex-none">
+                      <Filter size={16} className="text-slate-400 mr-2" />
+                      <select value={filterGrade} onChange={e => setFilterGrade(e.target.value)} className="bg-transparent font-bold text-sm text-slate-700 outline-none w-full cursor-pointer appearance-none">
+                        <option value="ALL">すべての学年を表示</option>
+                        {GRADES.map(g => <option key={g} value={g}>{g}</option>)}
+                      </select>
+                    </div>
+                    <button onClick={downloadCSV} className="text-xs bg-slate-100 px-4 py-2 rounded-xl font-bold hover:bg-slate-200 flex items-center justify-center flex-1 sm:flex-none transition-colors">
+                      <Download size={14} className="mr-1"/>CSV出力
+                    </button>
+                  </div>
                 </div>
+
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-sm whitespace-nowrap border-collapse">
-                    <thead className="bg-slate-50 border-y"><tr><th className="p-3">氏名</th><th className="p-3 text-center">学年</th><th className="p-3">代表連絡先</th><th className="p-3 text-center">操作</th></tr></thead>
+                    <thead className="bg-slate-50 border-y select-none">
+                      <tr>
+                        {/* ★変更: クリックでソートできるヘッダー */}
+                        <th className="p-3 cursor-pointer hover:bg-slate-200 transition-colors group" onClick={() => handleSort('name')}>
+                          <div className="flex items-center text-slate-600">
+                            氏名 
+                            <ArrowUpDown size={12} className={`ml-1 transition-opacity ${sortConfig.key === 'name' ? 'text-emerald-500 opacity-100' : 'text-slate-300 opacity-0 group-hover:opacity-100'}`} />
+                          </div>
+                        </th>
+                        <th className="p-3 cursor-pointer hover:bg-slate-200 transition-colors group text-center" onClick={() => handleSort('grade')}>
+                          <div className="flex items-center justify-center text-slate-600">
+                            学年 
+                            <ArrowUpDown size={12} className={`ml-1 transition-opacity ${sortConfig.key === 'grade' ? 'text-emerald-500 opacity-100' : 'text-slate-300 opacity-0 group-hover:opacity-100'}`} />
+                          </div>
+                        </th>
+                        <th className="p-3 text-slate-600">代表連絡先</th>
+                        <th className="p-3 text-center text-slate-600">受付状況</th>
+                        <th className="p-3 text-center text-slate-600">操作</th>
+                      </tr>
+                    </thead>
                     <tbody className="divide-y">
-                      {activeMembers.map(m => (
-                        <tr key={m.id} className={`hover:bg-slate-50 ${m.status==='new'?'bg-emerald-50/50':''}`}>
+                      {/* ★変更: displayMembers をマッピング */}
+                      {displayMembers.map(m => (
+                        <tr key={m.id} className={`hover:bg-slate-50 ${m.status==='new'?'bg-emerald-50/50': m.status==='update'?'bg-blue-50/50':''}`}>
                           <td className="p-3 font-bold"><div className="text-[10px] text-slate-400 font-normal">{m.kana}</div>{m.name}</td>
                           <td className="p-3 text-center"><span className="bg-slate-100 px-2 py-1 rounded-full text-xs font-bold">{m.grade}</span></td>
                           <td className="p-3 font-mono text-xs">{m.parentMotherPhone || m.parentFatherPhone || '-'}</td>
+                          
+                          <td className="p-3 text-center">
+                            {m.status === 'new' ? (
+                              <button onClick={() => requestApprove(m, '入会')} className="bg-emerald-500 text-white px-2 py-1.5 rounded-lg text-[10px] font-bold shadow hover:bg-emerald-600 w-16 leading-tight">入会<br/>未確認</button>
+                            ) : m.status === 'update' ? (
+                              <button onClick={() => requestApprove(m, '更新')} className="bg-blue-500 text-white px-2 py-1.5 rounded-lg text-[10px] font-bold shadow hover:bg-blue-600 w-16 leading-tight">更新<br/>未確認</button>
+                            ) : (
+                              <span className="text-[10px] text-slate-500 bg-slate-100 px-2 py-1 rounded border border-slate-200 whitespace-nowrap">{m.approvedBy ? `${m.approvedBy} 確認` : '確認済'}</span>
+                            )}
+                          </td>
+
                           <td className="p-3 text-center">
                             <div className="flex justify-center items-center gap-2">
                               <button onClick={() => onPrint(m)} className="text-slate-400 hover:text-blue-600 p-2" title="印刷"><Printer size={18}/></button>
@@ -663,6 +781,9 @@
                           </td>
                         </tr>
                       ))}
+                      {displayMembers.length === 0 && (
+                        <tr><td colSpan="5" className="p-8 text-center text-slate-400 font-bold">該当する選手はいません</td></tr>
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -673,12 +794,21 @@
                   <h2 className="font-bold text-slate-500 mb-4 flex items-center"><LogOut size={16} className="mr-2"/>退会者一覧 ({inactiveMembers.length}名)</h2>
                   <div className="overflow-x-auto">
                     <table className="w-full text-left text-sm whitespace-nowrap opacity-75">
-                      <thead><tr className="border-b border-slate-300"><th className="pb-2">氏名</th><th className="pb-2">退会理由</th><th className="pb-2 text-center">操作</th></tr></thead>
+                      <thead><tr className="border-b border-slate-300"><th className="pb-2">氏名</th><th className="pb-2">退会理由</th><th className="pb-2 text-center">受付状況</th><th className="pb-2 text-center">操作</th></tr></thead>
                       <tbody className="divide-y divide-slate-200">
                         {inactiveMembers.map(m => (
                           <tr key={m.id}>
                             <td className="py-3 font-bold">{m.name}</td>
                             <td className="py-3 text-xs truncate max-w-[200px]">{m.leaveReason || '-'}</td>
+                            
+                            <td className="py-3 text-center">
+                              {!m.approvedBy ? (
+                                <button onClick={() => requestApproveLeave(m)} className="bg-rose-500 text-white px-2 py-1.5 rounded-lg text-[10px] font-bold shadow hover:bg-rose-600 w-16 leading-tight">退会<br/>未確認</button>
+                              ) : (
+                                <span className="text-[10px] text-slate-500 bg-slate-200 border border-slate-300 px-2 py-1 rounded whitespace-nowrap">{m.approvedBy} 確認</span>
+                              )}
+                            </td>
+
                             <td className="py-3 text-center">
                               <div className="flex justify-center gap-2">
                                 <button onClick={() => onPrint(m)} className="text-slate-400 hover:text-slate-700 p-2" title="退会届を印刷"><Printer size={16}/></button>
@@ -697,12 +827,32 @@
 
           {tab === 'money' && (
             <div className="bg-white rounded-3xl border p-6">
-              <h2 className="font-bold text-xl mb-6 border-l-4 border-blue-500 pl-3">集金チェック</h2>
+              
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
+                <h2 className="font-bold text-xl border-l-4 border-blue-500 pl-3">集金チェック</h2>
+                <div className="flex items-center bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 w-full sm:w-auto">
+                  <Filter size={16} className="text-slate-400 mr-2" />
+                  <select value={filterGrade} onChange={e => setFilterGrade(e.target.value)} className="bg-transparent font-bold text-sm text-slate-700 outline-none w-full cursor-pointer appearance-none">
+                    <option value="ALL">すべての学年を表示</option>
+                    {GRADES.map(g => <option key={g} value={g}>{g}</option>)}
+                  </select>
+                </div>
+              </div>
+
               <div className="overflow-x-auto">
                 <table className="w-full text-xs border-collapse">
-                  <thead className="bg-slate-50 sticky top-0 z-10"><tr><th className="p-3 border text-left">氏名</th>{['入会','前期','後期','競技','保険'].map(h=><th key={h} className="p-2 border">{h}</th>)}</tr></thead>
+                  <thead className="bg-slate-50 sticky top-0 z-10 select-none">
+                    <tr>
+                      <th className="p-3 border cursor-pointer hover:bg-slate-200 transition-colors group" onClick={() => handleSort('name')}>
+                        <div className="flex items-center justify-between text-slate-600">
+                          氏名 <ArrowUpDown size={12} className={`transition-opacity ${sortConfig.key === 'name' ? 'text-blue-500 opacity-100' : 'text-slate-300 opacity-0 group-hover:opacity-100'}`} />
+                        </div>
+                      </th>
+                      {['入会','前期','後期','競技','保険'].map(h=><th key={h} className="p-2 border text-center text-slate-600">{h}</th>)}
+                    </tr>
+                  </thead>
                   <tbody className="divide-y">
-                    {activeMembers.filter(m=>!m.grade.includes('OB')).map(m => (
+                    {displayMembers.filter(m=>!m.grade.includes('OB')).map(m => (
                       <tr key={m.id}>
                         <td className="p-3 border font-bold">{m.name}<div className="text-[9px] font-normal text-slate-400">{m.grade}</div></td>
                         {['entrance','term1','term2','track','insurance'].map(f => (
@@ -710,17 +860,27 @@
                             <button onClick={async () => {
                               try {
                                 if(!m.id) throw new Error("IDがありません。再読み込みしてください。");
-                                await updateDoc(getDocRef('members', m.id), {[`payments.${f}`]: !m.payments?.[f]});
+                                const isPaid = !m.payments?.[f];
+                                await updateDoc(getDocRef('members', m.id), {
+                                  [`payments.${f}`]: isPaid,
+                                  [`paymentReceivers.${f}`]: isPaid ? adminName : null
+                                });
                               } catch(e) {
                                 setConfirmDialog({ message: `変更に失敗しました。\n\n【エラー原因】\n${e.message}`, onConfirm: null, isInfo: true });
                               }
-                            }} className={`w-8 h-8 rounded-full font-bold transition-all ${m.payments?.[f] ? 'bg-blue-600 text-white shadow' : 'bg-slate-100 text-slate-300'}`}>
-                              {m.payments?.[f] ? '済' : '未'}
+                            }} className={`w-full max-w-[50px] mx-auto py-1 rounded-lg font-bold transition-all text-[10px] flex flex-col items-center justify-center leading-tight shadow-sm border ${m.payments?.[f] ? 'bg-blue-600 text-white border-blue-700' : 'bg-slate-50 text-slate-400 border-slate-200 hover:bg-slate-100'}`}>
+                              <span className="text-[12px] mb-0.5">{m.payments?.[f] ? '済' : '未'}</span>
+                              {m.payments?.[f] && (
+                                <span className="text-[8px] font-normal opacity-90 truncate w-full text-center px-0.5">{m.paymentReceivers?.[f] || '受領'}</span>
+                              )}
                             </button>
                           </td>
                         ))}
                       </tr>
                     ))}
+                    {displayMembers.filter(m=>!m.grade.includes('OB')).length === 0 && (
+                      <tr><td colSpan="6" className="p-8 text-center text-slate-400 font-bold">該当する選手はいません</td></tr>
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -737,7 +897,7 @@
                         <h3 className="font-bold text-xl text-slate-800">{t.name}</h3>
                         <div className="flex flex-wrap gap-2 mt-3">
                           {(t.events || []).map((ev, idx) => {
-                            const isOld = typeof ev === 'string'; // 古いデータの互換性対応
+                            const isOld = typeof ev === 'string'; 
                             const name = isOld ? ev : ev.name;
                             const fee = isOld ? t.eventFee : ev.fee;
                             return (
